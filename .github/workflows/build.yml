@@ -1,0 +1,73 @@
+# يبني منصة الاختبارات من المستودع الخاص وينشر الإصدار هنا في المستودع العام.
+# التشغيل: Actions ← Build release ← Run workflow (أو: gh workflow run build.yml -R alaaelmorsy/Mohamed-Hosny)
+# الأسرار المطلوبة في هذا المستودع:
+#   SRC_REPO_TOKEN  توكن قراءة فقط لـ alaaelmorsy/Mohamed-Hosny-src
+#   INSTALLER_ENV   محتوى ملف installer/.env كاملًا
+name: Build release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'الفرع أو العلامة في المستودع الخاص'
+        default: main
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: alaaelmorsy/Mohamed-Hosny-src
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.SRC_REPO_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      - name: Read version
+        id: ver
+        shell: bash
+        run: |
+          v=$(node -p "require('./package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if gh release view "v$v" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::v$v already released — bump version in package.json first"; exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Write installer .env
+        shell: bash
+        run: printf '%s\n' "$INSTALLER_ENV" > installer/.env
+        env:
+          INSTALLER_ENV: ${{ secrets.INSTALLER_ENV }}
+
+      - name: Build exe and installer
+        run: npm run build
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          gh release create "v$V" -R "$GITHUB_REPOSITORY" --target main --title "v$V" \
+            --notes "إصدار v$V" \
+            release/exam-platform.exe release/sha256sums.txt "dist/ExamPlatform-Setup-v$V.exe"
